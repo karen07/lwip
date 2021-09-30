@@ -3,23 +3,30 @@
 #include "lwip/etharp.h"
 #include "lwip/udp.h"
 #include "lwip/tcp.h"
-#include "lwip/apps/httpd.h"
-#include "lwip/opt.h"
-#include "lwip/apps/fs.h"
-#include "lwip/def.h"
-#include "lwip/mem.h"
 #include "net.h"
-
-#include "linux/delay.h"
-#include "u-boot/sha1.h"
-#include "u-boot/sha256.h"
 #include "common.h"
-#include "console.h"
-#include "command.h"
+
+#include "u-boot/sha1.h"
 
 #include "base64.h"
 
 #include "lwip_u_boot_port.h"
+
+typedef struct dhcps_msg {
+        uint8_t op, htype, hlen, hops;
+        uint8_t xid[4];
+        uint8_t secs[2];
+        uint8_t flags[2];
+        uint8_t ciaddr[4];
+        uint8_t yiaddr[4];
+        uint8_t siaddr[4];
+        uint8_t giaddr[4];
+        uint8_t chaddr[16];
+        uint8_t sname[64];
+        uint8_t file[128];
+        uint8_t options[576];
+}dhcps_msg;
+
 
 struct netif netif;
 
@@ -27,11 +34,19 @@ int web_socket_open;
 struct tcp_pcb* globa_tcp;
 char tcp_get;
 
+int dhcp_firts_in;
+
 const char WS_RSP[] = \
 	"HTTP/1.1 101 Switching Protocols\r\n" \
 	"Upgrade: websocket\r\n" \
 	"Connection: Upgrade\r\n" \
 	"Sec-WebSocket-Accept: %s\r\n\r\n";
+
+const char http_ans[] = \
+"HTTP/1.1 200 OK\n" \
+"Content-Type: text/html\n" \
+"\n" \
+"<link href=https://cdnjs.cloudflare.com/ajax/libs/xterm/3.14.5/xterm.min.css rel=stylesheet><script src=https://cdnjs.cloudflare.com/ajax/libs/xterm/3.14.5/xterm.min.js></script><div id=terminal></div><script>var opts={cols:80,rows:54,convertEol:1},term=new Terminal(opts);term.open(document.getElementById(\"terminal\"));var ws=new WebSocket(\"ws://192.168.1.1:3000\");ws.binaryType=\"arraybuffer\",ws.addEventListener(\"message\",function(e){term.write(e.data)}),term.on(\"key\",function(e,n){13===n.keyCode?ws.send(\"\\n\"):8===n.keyCode?ws.send(\"\\b\"):ws.send(e)})</script>";
 	
 const char WS_GUID[] = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 const char WS_KEY[] = "Sec-WebSocket-Key: ";
@@ -48,7 +63,7 @@ void eth_save_packet_lwip(void* packet, int length) {
 	}
 }
 
-err_t tcp_echoserver_recv(void* arg, struct tcp_pcb* tpcb, struct pbuf* p, err_t err) {
+err_t websocket_recv(void* arg, struct tcp_pcb* tpcb, struct pbuf* p, err_t err) {
 	if (p == NULL) {
 		web_socket_open = 0;
 		globa_tcp = NULL;
@@ -87,7 +102,7 @@ err_t tcp_echoserver_recv(void* arg, struct tcp_pcb* tpcb, struct pbuf* p, err_t
 			web_socket_open = 1;
 			globa_tcp = tpcb;
 			
-			printf("malta #");
+			printf(CONFIG_SYS_PROMPT);
 		}
 	} else {
 		uint8_t opcode = tcp_rec[0] & 0x0F;
@@ -103,7 +118,6 @@ err_t tcp_echoserver_recv(void* arg, struct tcp_pcb* tpcb, struct pbuf* p, err_t
 					tcp_rec[6 + data_len] = 0;
 					
 					tcp_get = tcp_rec[6];
-			
                 }
                 break;
 			case 0x08:
@@ -115,12 +129,108 @@ err_t tcp_echoserver_recv(void* arg, struct tcp_pcb* tpcb, struct pbuf* p, err_t
 	return ERR_OK;
 }
 
-err_t tcp_echoserver_accept(void* arg, struct tcp_pcb* newpcb, err_t err) {
+err_t http_recv(void* arg, struct tcp_pcb* tpcb, struct pbuf* p, err_t err) {
+	tcp_write(tpcb, http_ans, strlen(http_ans), 1);
+	int data_len = 	p->tot_len;
+	char tcp_rec[data_len];
+	pbuf_copy_partial(p, (void*)tcp_rec, data_len, 0);
+	tcp_recved(tpcb, data_len);
+	pbuf_free(p);
+	tcp_close(tpcb);
+	return ERR_OK;
+}
+
+void dhcp_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p, const ip_addr_t *addr, u16_t port) {
+	if(p == NULL)
+		return;
+	
+	dhcps_msg dhcp_rec;
+	
+	int data_len = 	p->tot_len;
+	pbuf_copy_partial(p, (void*)&dhcp_rec, data_len, 0);
+	pbuf_free(p);
+		
+	memset(&dhcp_rec.options, 0, 576);
+		
+	dhcp_rec.op = 0x02;
+		
+	dhcp_rec.yiaddr[0] = 0xc0;
+	dhcp_rec.yiaddr[1] = 0xa8;
+	dhcp_rec.yiaddr[2] = 0x01;
+	dhcp_rec.yiaddr[3] = 0x02;
+		
+	dhcp_rec.siaddr[0] = 0xc0;
+	dhcp_rec.siaddr[1] = 0xa8;
+	dhcp_rec.siaddr[2] = 0x01;
+	dhcp_rec.siaddr[3] = 0x01;
+		
+	dhcp_rec.options[0] = 99;
+	dhcp_rec.options[1] = 130;
+	dhcp_rec.options[2] = 83;
+	dhcp_rec.options[3] = 99;
+		
+	if (dhcp_firts_in) {
+		dhcp_rec.options[4] = 53;
+		dhcp_rec.options[5] = 1;
+		dhcp_rec.options[6] = 2;
+			
+		dhcp_firts_in = 0;
+	} else {
+		dhcp_rec.options[4] = 53;
+		dhcp_rec.options[5] = 1;
+		dhcp_rec.options[6] = 5;
+	}
+		
+	dhcp_rec.options[7] = 54;
+	dhcp_rec.options[8] = 4;
+	dhcp_rec.options[9] = 0xc0;
+	dhcp_rec.options[10] = 0xa8;
+	dhcp_rec.options[11] = 0x01;
+	dhcp_rec.options[12] = 0x01;
+		
+	dhcp_rec.options[13] = 1;
+	dhcp_rec.options[14] = 4;
+	dhcp_rec.options[15] = 0xff;
+	dhcp_rec.options[16] = 0xff;
+	dhcp_rec.options[17] = 0xff;
+	dhcp_rec.options[18] = 0x00;
+		
+	dhcp_rec.options[19] = 28;
+	dhcp_rec.options[20] = 4;
+	dhcp_rec.options[21] = 0xc0;
+	dhcp_rec.options[22] = 0xa8;
+	dhcp_rec.options[23] = 0x01;
+	dhcp_rec.options[24] = 0xff;
+		
+	dhcp_rec.options[25] = 255;
+		
+	p = pbuf_alloc(PBUF_TRANSPORT, data_len, PBUF_RAM);
+    memcpy(p->payload, &dhcp_rec, data_len);
+		
+	udp_sendto(pcb, p, IP_ADDR_BROADCAST, 68);
+		
+	pbuf_free(p);
+}
+
+err_t websocket_accept(void* arg, struct tcp_pcb* newpcb, err_t err) {
 	LWIP_UNUSED_ARG(arg);
 	LWIP_UNUSED_ARG(err);
 
 	if(!web_socket_open) {
-		tcp_recv(newpcb, tcp_echoserver_recv);
+		tcp_recv(newpcb, websocket_recv);
+		return ERR_OK;
+	} else {
+		tcp_abort(newpcb);
+		return ERR_ABRT;
+	}
+}
+
+err_t http_accept(void* arg, struct tcp_pcb* newpcb, err_t err) {
+	LWIP_UNUSED_ARG(arg);
+	LWIP_UNUSED_ARG(err);
+
+	if(!web_socket_open) {
+		tcp_recv(newpcb, http_recv);
 		return ERR_OK;
 	} else {
 		tcp_abort(newpcb);
@@ -170,14 +280,25 @@ int lwip_u_boot_port(struct cmd_tbl * arg1, int arg2,  int arg3,  char * const* 
 	netif.name[1] = '0';
 	netif_set_default(&netif);
 	
-	struct tcp_pcb* tcp_echoserver_pcb = tcp_new();
-	tcp_bind(tcp_echoserver_pcb, IP_ADDR_ANY, 3000);
-	tcp_echoserver_pcb = tcp_listen_with_backlog(tcp_echoserver_pcb, TCP_DEFAULT_LISTEN_BACKLOG);
-	tcp_accept(tcp_echoserver_pcb, tcp_echoserver_accept);
+	struct tcp_pcb* websocket = tcp_new();
+	tcp_bind(websocket, IP_ADDR_ANY, 3000);
+	websocket = tcp_listen_with_backlog(websocket, TCP_DEFAULT_LISTEN_BACKLOG);
+	tcp_accept(websocket, websocket_accept);
+	
+	struct tcp_pcb* http = tcp_new();
+	tcp_bind(http, IP_ADDR_ANY, 80);
+	http = tcp_listen_with_backlog(http, TCP_DEFAULT_LISTEN_BACKLOG);
+	tcp_accept(http, http_accept);
+	
+	struct udp_pcb *dhcp = udp_new();
+	udp_bind(dhcp, IP_ADDR_ANY, 67);
+	udp_recv(dhcp , dhcp_recv, NULL);
 	
 	web_socket_open = 0;
 	globa_tcp = NULL;
 	tcp_get = 0;
+	
+	dhcp_firts_in = 1;
 
 	push_packet = eth_save_packet_lwip;
 	
