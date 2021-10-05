@@ -6,8 +6,7 @@
 #include "net.h"
 #include "common.h"
 
-#include "u-boot/sha1.h"
-
+#include "sha1.h"
 #include "base64.h"
 
 #include "lwip_u_boot_port.h"
@@ -86,7 +85,7 @@ err_t websocket_recv(void* arg, struct tcp_pcb* tpcb, struct pbuf* p, err_t err)
 			strcat(sec_and_uid_websockeet, WS_GUID);
 
 			char result_sha[20];
-			sha1_csum((unsigned char *)sec_and_uid_websockeet, strlen(sec_and_uid_websockeet), (unsigned char *)result_sha);
+			SHA1((unsigned char *)result_sha, (unsigned char *)sec_and_uid_websockeet, strlen(sec_and_uid_websockeet));
 			
 			char web_socket_base64[100];
 			bintob64(web_socket_base64, result_sha, 20);
