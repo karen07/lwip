@@ -276,7 +276,7 @@ err_t netif_set_opts(struct netif* netif) {
 	return ERR_OK;
 }
 
-int lwip_u_boot_port(struct cmd_tbl * arg1, int arg2,  int arg3,  char * const* arg4) {
+void lwip_u_boot_port() {
 	eth_halt();
 	eth_init();
 	
@@ -315,6 +315,4 @@ int lwip_u_boot_port(struct cmd_tbl * arg1, int arg2,  int arg3,  char * const* 
 	tcp_get = 0;
 	
 	push_packet = eth_save_packet_lwip;
-	
-	return 0;
 }
