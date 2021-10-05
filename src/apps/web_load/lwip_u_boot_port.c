@@ -27,14 +27,11 @@ typedef struct dhcps_msg {
         uint8_t options[576];
 }dhcps_msg;
 
-
 struct netif netif;
 
 int web_socket_open;
 struct tcp_pcb* globa_tcp;
 char tcp_get;
-
-int dhcp_firts_in;
 
 const char WS_RSP[] = \
 	"HTTP/1.1 101 Switching Protocols\r\n" \
@@ -149,6 +146,19 @@ void dhcp_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p, const ip_addr_t *
 	int data_len = 	p->tot_len;
 	pbuf_copy_partial(p, (void*)&dhcp_rec, data_len, 0);
 	pbuf_free(p);
+	
+	int i = 4;
+	while(dhcp_rec.options[i] != 255 && dhcp_rec.options[i] != 53) {
+		i += dhcp_rec.options[i+1] + 2;
+	}
+	
+	uint8_t dchp_state;
+
+	if(dhcp_rec.options[i] == 53) {
+		dchp_state = dhcp_rec.options[i+2];
+	} else {
+		return;
+	}
 		
 	memset(&dhcp_rec.options, 0, 576);
 		
@@ -169,17 +179,17 @@ void dhcp_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p, const ip_addr_t *
 	dhcp_rec.options[2] = 83;
 	dhcp_rec.options[3] = 99;
 		
-	if (dhcp_firts_in) {
-		dhcp_rec.options[4] = 53;
-		dhcp_rec.options[5] = 1;
-		dhcp_rec.options[6] = 2;
-			
-		dhcp_firts_in = 0;
-	} else {
-		dhcp_rec.options[4] = 53;
-		dhcp_rec.options[5] = 1;
-		dhcp_rec.options[6] = 5;
-	}
+	if (dchp_state == 1) {
+        dhcp_rec.options[4] = 53;
+        dhcp_rec.options[5] = 1;
+        dhcp_rec.options[6] = 2;
+    }
+	
+	if (dchp_state == 3) {
+        dhcp_rec.options[4] = 53;
+        dhcp_rec.options[5] = 1;
+        dhcp_rec.options[6] = 5;
+    }
 		
 	dhcp_rec.options[7] = 54;
 	dhcp_rec.options[8] = 4;
@@ -202,7 +212,14 @@ void dhcp_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p, const ip_addr_t *
 	dhcp_rec.options[23] = 0x01;
 	dhcp_rec.options[24] = 0xff;
 		
-	dhcp_rec.options[25] = 255;
+	dhcp_rec.options[25] = 51;
+    dhcp_rec.options[26] = 4;
+    dhcp_rec.options[27] = 0x00;
+    dhcp_rec.options[28] = 0x01;
+    dhcp_rec.options[29] = 0x51;
+    dhcp_rec.options[30] = 0x80;
+
+    dhcp_rec.options[31] = 255;
 		
 	p = pbuf_alloc(PBUF_TRANSPORT, data_len, PBUF_RAM);
     memcpy(p->payload, &dhcp_rec, data_len);
@@ -298,8 +315,6 @@ int lwip_u_boot_port(struct cmd_tbl * arg1, int arg2,  int arg3,  char * const* 
 	globa_tcp = NULL;
 	tcp_get = 0;
 	
-	dhcp_firts_in = 1;
-
 	push_packet = eth_save_packet_lwip;
 	
 	return 0;

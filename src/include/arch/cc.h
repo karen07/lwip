@@ -7,7 +7,11 @@
 
 int atoi(const char *str);
 
-#define BYTE_ORDER LITTLE_ENDIAN
+#ifdef CONFIG_SYS_BIG_ENDIAN
+	#define BYTE_ORDER BIG_ENDIAN
+#else
+	#define BYTE_ORDER LITTLE_ENDIAN
+#endif
 
 #define LWIP_NO_LIMITS_H 1
 #define LWIP_NO_CTYPE_H 1
