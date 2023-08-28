@@ -5,6 +5,7 @@
 #include "lwip/tcp.h"
 #include "net.h"
 #include "common.h"
+#include "http_ans.h"
 
 #include "sha1.h"
 #include "base64.h"
@@ -32,18 +33,16 @@ int web_socket_open;
 struct tcp_pcb* globa_tcp;
 char tcp_get;
 
+const char HTTP_RSP[] = \
+	"HTTP/1.1 200 OK\r\n" \
+	"Content-Length: %d\r\n" \
+	"Content-Type: text/html\r\n\r\n";
+
 const char WS_RSP[] = \
 	"HTTP/1.1 101 Switching Protocols\r\n" \
 	"Upgrade: websocket\r\n" \
 	"Connection: Upgrade\r\n" \
 	"Sec-WebSocket-Accept: %s\r\n\r\n";
-
-const char http_ans[] = \
-"HTTP/1.1 200 OK\n" \
-"Content-Type: text/html\n" \
-"\n" \
-"<link href=https://cdnjs.cloudflare.com/ajax/libs/xterm/3.14.5/xterm.min.css rel=stylesheet><script src=https://cdnjs.cloudflare.com/ajax/libs/xterm/3.14.5/xterm.min.js></script><div id=terminal></div><script>var opts={cols:80,rows:54,convertEol:1},term=new Terminal(opts);term.open(document.getElementById(\"terminal\"));var ws=new WebSocket(\"ws://192.168.1.1:3000\");ws.binaryType=\"arraybuffer\",ws.addEventListener(\"message\",function(e){term.write(e.data)}),term.on(\"key\",function(e,n){13===n.keyCode?ws.send(\"\\n\"):8===n.keyCode?ws.send(\"\\b\"):ws.send(e)})</script>";
-	
 const char WS_GUID[] = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 const char WS_KEY[] = "Sec-WebSocket-Key: ";
 
@@ -125,14 +124,36 @@ err_t websocket_recv(void* arg, struct tcp_pcb* tpcb, struct pbuf* p, err_t err)
 	return ERR_OK;
 }
 
+int http_ans_sended = 0;
+
 err_t http_recv(void* arg, struct tcp_pcb* tpcb, struct pbuf* p, err_t err) {
-	tcp_write(tpcb, http_ans, strlen(http_ans), 1);
 	int data_len = 	p->tot_len;
 	char tcp_rec[data_len];
 	pbuf_copy_partial(p, (void*)tcp_rec, data_len, 0);
 	tcp_recved(tpcb, data_len);
 	pbuf_free(p);
-	tcp_close(tpcb);
+
+	char answer_html[1000];
+	sprintf(answer_html, HTTP_RSP, http_ans_len);
+
+	tcp_write(tpcb, answer_html, strlen(answer_html), 0x01);
+
+	http_ans_sended = 0;
+
+	return ERR_OK;
+}
+
+err_t http_sent(void *arg, struct tcp_pcb *tpcb, u16_t len) {
+    int send_size = len;
+
+	if(http_ans_len - http_ans_sended > send_size){
+		tcp_write(tpcb, http_ans + http_ans_sended, send_size, 0x01);
+	} else {
+		tcp_write(tpcb, http_ans + http_ans_sended, http_ans_len - http_ans_sended, 0x01);
+	}
+
+	http_ans_sended += send_size;
+
 	return ERR_OK;
 }
 
@@ -165,12 +186,12 @@ void dhcp_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p, const ip_addr_t *
 		
 	dhcp_rec.yiaddr[0] = 0xc0;
 	dhcp_rec.yiaddr[1] = 0xa8;
-	dhcp_rec.yiaddr[2] = 0x01;
+	dhcp_rec.yiaddr[2] = 0x0a;
 	dhcp_rec.yiaddr[3] = 0x02;
 		
 	dhcp_rec.siaddr[0] = 0xc0;
 	dhcp_rec.siaddr[1] = 0xa8;
-	dhcp_rec.siaddr[2] = 0x01;
+	dhcp_rec.siaddr[2] = 0x0a;
 	dhcp_rec.siaddr[3] = 0x01;
 		
 	dhcp_rec.options[0] = 99;
@@ -194,7 +215,7 @@ void dhcp_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p, const ip_addr_t *
 	dhcp_rec.options[8] = 4;
 	dhcp_rec.options[9] = 0xc0;
 	dhcp_rec.options[10] = 0xa8;
-	dhcp_rec.options[11] = 0x01;
+	dhcp_rec.options[11] = 0x0a;
 	dhcp_rec.options[12] = 0x01;
 		
 	dhcp_rec.options[13] = 1;
@@ -208,7 +229,7 @@ void dhcp_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p, const ip_addr_t *
 	dhcp_rec.options[20] = 4;
 	dhcp_rec.options[21] = 0xc0;
 	dhcp_rec.options[22] = 0xa8;
-	dhcp_rec.options[23] = 0x01;
+	dhcp_rec.options[23] = 0x0a;
 	dhcp_rec.options[24] = 0xff;
 		
 	dhcp_rec.options[25] = 51;
@@ -247,6 +268,7 @@ err_t http_accept(void* arg, struct tcp_pcb* newpcb, err_t err) {
 
 	if(!web_socket_open) {
 		tcp_recv(newpcb, http_recv);
+		tcp_sent(newpcb, http_sent);
 		return ERR_OK;
 	} else {
 		tcp_abort(newpcb);
@@ -284,9 +306,9 @@ void lwip_u_boot_port() {
 	ip4_addr_t netmask;
 	ip4_addr_t gw;
 
-	IP4_ADDR(&addr, 192, 168, 1, 1);
+	IP4_ADDR(&addr, 192, 168, 10, 1);
 	IP4_ADDR(&netmask, 255, 255, 255, 0);
-	IP4_ADDR(&gw, 192, 168, 1, 2);
+	IP4_ADDR(&gw, 192, 168, 10, 2);
 
 	lwip_init();
 
