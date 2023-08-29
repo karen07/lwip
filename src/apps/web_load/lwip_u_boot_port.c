@@ -144,7 +144,7 @@ err_t http_recv(void* arg, struct tcp_pcb* tpcb, struct pbuf* p, err_t err) {
 }
 
 err_t http_sent(void *arg, struct tcp_pcb *tpcb, u16_t len) {
-    int send_size = len;
+    int send_size = 1000;
 
 	if(http_ans_len - http_ans_sended > send_size){
 		tcp_write(tpcb, http_ans + http_ans_sended, send_size, 0x01);
