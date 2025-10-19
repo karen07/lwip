@@ -100,7 +100,7 @@ typedef s8_t err_t;
  * @}
  */
 
-#ifdef LWIP_DEBUG
+#ifdef LWIP_DEBUG_lwip
 extern const char *lwip_strerr(err_t err);
 #else
 #define lwip_strerr(x) ""
